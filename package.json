@@ -1,0 +1,9 @@
+{
+  "name": "krutidev-studio",
+  "version": "1.0.0",
+  "description": "Overleaf-style editor for converting Unicode Marathi/Hindi documents to Kruti Dev 035, preserving formatting.",
+  "type": "module",
+  "scripts": {
+    "test": "node test/parity.test.js"
+  },  "license": "MIT"
+}

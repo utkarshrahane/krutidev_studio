@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KrutiDev Studio — Unicode ⇄ Kruti Dev 035</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">क</span>
+    <div class="brand-text">
+      <h1>KrutiDev Studio</h1>
+      <p>Unicode Marathi&nbsp;→&nbsp;Kruti&nbsp;Dev&nbsp;035, formatting preserved</p>
+    </div>
+  </div>
+  <div class="toolbar">
+    <input type="file" id="file-input" accept=".docx" hidden>
+    <button id="upload-btn" class="btn">Upload .docx</button>
+    <button id="paste-btn" class="btn btn-ghost">Paste text</button>
+    <button id="refresh-btn" class="btn btn-primary">Refresh ⟳</button>
+    <button id="export-btn" class="btn btn-accent" disabled>Export .docx ↓</button>
+  </div>
+</header>
+
+<div id="font-banner" class="font-banner" hidden>
+  Kruti Dev 035 doesn't seem to be installed in this browser, so the right pane will show fallback
+  glyphs instead of real Devanagari shapes. The converted text is still correct — install the font
+  locally (or open the exported .docx on a machine that has it) to see the true rendering.
+</div>
+
+<main class="workspace">
+  <section class="pane">
+    <div class="pane-header">
+      <span class="pane-title">Unicode Marathi</span>
+      <span class="pane-hint">editable — click any word to fix it</span>
+    </div>
+    <div id="editor-pane" class="pane-body doc-surface" spellcheck="false">
+      <p class="hint">Upload a .docx, or use “Paste text”, to get started.</p>
+    </div>
+  </section>
+
+  <section class="pane">
+    <div class="pane-header">
+      <span class="pane-title">Kruti Dev 035</span>
+      <span class="pane-hint">read-only preview</span>
+    </div>
+    <div id="preview-pane" class="pane-body doc-surface">
+      <p class="hint">The converted document will appear here after you click Refresh.</p>
+    </div>
+  </section>
+</main>
+
+<footer id="status-bar" class="status-bar">Ready.</footer>
+
+<div id="paste-overlay" class="overlay" hidden>
+  <div class="modal">
+    <h2>Paste Marathi text</h2>
+    <p class="modal-hint">Plain text only — one paragraph per line. For real formatting (bold, alignment), upload a .docx instead.</p>
+    <textarea id="paste-area" rows="10" placeholder="कोर्ट विद्यमान दिवाणी न्यायाधीश…"></textarea>
+    <div class="modal-actions">
+      <button id="paste-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="paste-confirm" class="btn btn-primary">Load text</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
