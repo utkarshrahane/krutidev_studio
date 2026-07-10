@@ -193,4 +193,21 @@ export function renderDocumentXml(templateXml, segmentsById) {
   });
 }
 
+/**
+ * Render the model's document.xml with each run's *current Unicode text*
+ * substituted back in verbatim — no Kruti Dev conversion, no font swapping,
+ * no run splitting. Produces an editable Unicode .docx that preserves all
+ * original formatting, so in-progress work can be re-uploaded to continue.
+ *
+ * @param {string} templateXml
+ * @param {Map<string,string>} textById  run id -> current Unicode text
+ */
+export function renderUnicodeDocumentXml(templateXml, textById) {
+  let xml = templateXml;
+  for (const [id, text] of textById) {
+    xml = xml.split(id).join(xmlEscape(text));
+  }
+  return xml;
+}
+
 export { FONT_FILES, xmlEscape, xmlUnescape };

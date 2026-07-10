@@ -1,4 +1,4 @@
-import { FONT_FILES, renderDocumentXml } from './docxModel.js';
+import { FONT_FILES, renderDocumentXml, renderUnicodeDocumentXml } from './docxModel.js';
 
 const TARGET_FONT = 'Kruti Dev 035';
 // Never swap this font: it's what the exporter injects for Latin-passthrough
@@ -34,6 +34,20 @@ export async function exportDocx(zip, templateXml, segmentsById, sourceFontNames
     zip.file(path, swapFonts(content, sourceFontNames));
   }
 
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+}
+
+/**
+ * Save the current edited text as a Unicode .docx (no Kruti Dev conversion,
+ * no font change) so in-progress work can be re-uploaded later. Only
+ * word/document.xml is rewritten; everything else is left exactly as it was.
+ */
+export async function saveUnicodeDocx(zip, templateXml, textById) {
+  const unicodeXml = renderUnicodeDocumentXml(templateXml, textById);
+  zip.file('word/document.xml', unicodeXml);
   return zip.generateAsync({
     type: 'blob',
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

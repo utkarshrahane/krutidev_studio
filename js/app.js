@@ -1,12 +1,13 @@
 import { convertToSegments } from './converter/segmenter.js';
 import { loadDocxModel } from './docx/docxModel.js';
-import { exportDocx } from './docx/docxExporter.js';
+import { exportDocx, saveUnicodeDocx } from './docx/docxExporter.js';
 import { renderEditor, readEditorText } from './ui/editorPane.js';
 import { renderPreview } from './ui/previewPane.js';
 import { isKrutiDevInstalled, waitForFontsReady } from './ui/fontCheck.js';
 
 const state = {
-  zip: null,
+  fileBuffer: null,   // original uploaded .docx bytes (source of truth)
+  fileBaseName: null, // original name without extension, for save naming
   templateXml: null,
   paragraphs: [],
   sourceFontNames: [],
@@ -21,6 +22,7 @@ function cacheElements() {
   els.pasteBtn = document.getElementById('paste-btn');
   els.refreshBtn = document.getElementById('refresh-btn');
   els.exportBtn = document.getElementById('export-btn');
+  els.saveUnicodeBtn = document.getElementById('save-unicode-btn');
   els.editor = document.getElementById('editor-pane');
   els.preview = document.getElementById('preview-pane');
   els.fontBanner = document.getElementById('font-banner');
@@ -47,7 +49,10 @@ async function handleFileUpload(file) {
     }
     const { templateXml, runIndex, paragraphs, sourceFontNames } = await loadDocxModel(zip);
 
-    state.zip = zip;
+    // Keep the original bytes as the source of truth; every save/export
+    // reloads a fresh zip from these so operations never contaminate each other.
+    state.fileBuffer = buffer;
+    state.fileBaseName = stripExtension(file.name);
     state.templateXml = templateXml;
     state.paragraphs = paragraphs;
     state.sourceFontNames = sourceFontNames;
@@ -56,11 +61,25 @@ async function handleFileUpload(file) {
     renderEditor(els.editor, paragraphs);
     els.preview.innerHTML = '<p class="hint">Click “Refresh” to render this in Kruti Dev 035.</p>';
     els.exportBtn.disabled = true;
+    if (els.saveUnicodeBtn) els.saveUnicodeBtn.disabled = false;
     setStatus(`Loaded ${file.name} — ${paragraphs.length} paragraphs.`);
   } catch (err) {
     console.error(err);
     setStatus(`Could not read that file: ${err.message}`, true);
   }
+}
+
+function stripExtension(name) {
+  return name.replace(/\.[^.]+$/, '');
+}
+
+/** Local-time DDMMYYHHMMSS stamp, e.g. 090726143052. */
+function timestamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return (
+    p(d.getDate()) + p(d.getMonth() + 1) + p(d.getFullYear() % 100) +
+    p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds())
+  );
 }
 
 function loadPlainText(text) {
@@ -69,7 +88,8 @@ function loadPlainText(text) {
     align: 'left',
     runs: line.length ? [{ id: `RUN${i}`, text: line, bold: false, italic: false, underline: false }] : [],
   }));
-  state.zip = null;
+  state.fileBuffer = null;
+  state.fileBaseName = 'pasted-text';
   state.templateXml = null;
   state.paragraphs = paragraphs;
   state.sourceFontNames = [];
@@ -78,6 +98,7 @@ function loadPlainText(text) {
   renderEditor(els.editor, paragraphs);
   els.preview.innerHTML = '<p class="hint">Click “Refresh” to render this in Kruti Dev 035.</p>';
   els.exportBtn.disabled = true;
+  if (els.saveUnicodeBtn) els.saveUnicodeBtn.disabled = false;
   setStatus(`Loaded pasted text — ${paragraphs.length} lines.`);
 }
 
@@ -112,14 +133,17 @@ async function doExport() {
   }
   setStatus('Building .docx…');
   try {
-    if (state.mode === 'docx' && state.zip) {
+    if (state.mode === 'docx' && state.fileBuffer) {
+      // Reload a clean zip from the original bytes so this export can't be
+      // affected by (or affect) any earlier save/export.
+      const zip = await JSZip.loadAsync(state.fileBuffer);
       const blob = await exportDocx(
-        state.zip,
+        zip,
         state.templateXml,
         state.lastSegmentsById,
         state.sourceFontNames.length ? state.sourceFontNames : ['Nirmala UI', 'Noto Sans Devanagari']
       );
-      downloadBlob(blob, 'krutidev-035-converted.docx');
+      downloadBlob(blob, `${state.fileBaseName}_KrutiDev_${timestamp()}.docx`);
     } else {
       const text = state.paragraphs
         .map((p) =>
@@ -129,12 +153,51 @@ async function doExport() {
         )
         .join('\n');
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      downloadBlob(blob, 'krutidev-035-converted.txt');
+      downloadBlob(blob, `${state.fileBaseName}_KrutiDev_${timestamp()}.txt`);
     }
     setStatus('Download ready.');
   } catch (err) {
     console.error(err);
     setStatus(`Export failed: ${err.message}`, true);
+  }
+}
+
+/**
+ * Save the current (edited) Unicode text as a new timestamped .docx, keeping
+ * all original formatting so it can be re-uploaded later to continue editing.
+ * No Kruti Dev conversion happens here — this stays in editable Unicode.
+ */
+async function doSaveUnicode() {
+  if (!state.paragraphs.length) {
+    setStatus('Nothing to save yet — upload a .docx or paste text first.', true);
+    return;
+  }
+  // Pull the latest text out of the editor and sync it into the model.
+  const currentTextById = readEditorText(els.editor);
+  for (const para of state.paragraphs) {
+    for (const run of para.runs) {
+      if (currentTextById.has(run.id)) run.text = currentTextById.get(run.id);
+    }
+  }
+
+  setStatus('Saving Unicode copy…');
+  try {
+    const name = `${state.fileBaseName}_${timestamp()}`;
+    if (state.mode === 'docx' && state.fileBuffer) {
+      const zip = await JSZip.loadAsync(state.fileBuffer);
+      const blob = await saveUnicodeDocx(zip, state.templateXml, currentTextById);
+      downloadBlob(blob, `${name}.docx`);
+    } else {
+      const text = state.paragraphs
+        .map((p) => p.runs.map((r) => r.text).join(''))
+        .join('\n');
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      downloadBlob(blob, `${name}.txt`);
+    }
+    setStatus(`Saved ${name} — re-upload it later to continue editing.`);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Save failed: ${err.message}`, true);
   }
 }
 
@@ -187,6 +250,7 @@ function wireEvents() {
 
   els.refreshBtn.addEventListener('click', doRefresh);
   els.exportBtn.addEventListener('click', doExport);
+  if (els.saveUnicodeBtn) els.saveUnicodeBtn.addEventListener('click', doSaveUnicode);
 
   // drag & drop onto the editor pane
   els.editor.addEventListener('dragover', (e) => e.preventDefault());

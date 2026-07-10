@@ -139,11 +139,21 @@ body {
 .pane-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  padding: 10px 20px;
+  align-items: center;
+  padding: 8px 20px;
   border-bottom: 1px solid var(--paper-line);
   font-family: system-ui, sans-serif;
+  min-height: 48px;
 }
+
+.btn-save {
+  background: var(--ok-green);
+  color: #f4f1e8;
+  font-size: 14px;
+  padding: 10px 18px;
+}
+.btn-save:hover { filter: brightness(1.1); }
+.btn-save:disabled { opacity: 0.4; }
 
 .pane-title {
   font-weight: 700;
