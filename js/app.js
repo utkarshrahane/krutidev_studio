@@ -4,6 +4,7 @@ import { exportDocx, saveUnicodeDocx } from './docx/docxExporter.js';
 import { renderEditor, readEditorText } from './ui/editorPane.js';
 import { renderPreview } from './ui/previewPane.js';
 import { isKrutiDevInstalled, waitForFontsReady } from './ui/fontCheck.js';
+import { saveSession, loadSession, clearSession } from './state/sessionStore.js';
 
 const state = {
   fileBuffer: null,   // original uploaded .docx bytes (source of truth)
@@ -12,6 +13,7 @@ const state = {
   paragraphs: [],
   sourceFontNames: [],
   mode: null, // 'docx' | 'text'
+  dirty: false, // are there edits not yet exported/saved to a file?
 };
 
 const els = {};
@@ -31,6 +33,9 @@ function cacheElements() {
   els.pasteOverlay = document.getElementById('paste-overlay');
   els.pasteConfirm = document.getElementById('paste-confirm');
   els.pasteCancel = document.getElementById('paste-cancel');
+  els.restoreBanner = document.getElementById('restore-banner');
+  els.restoreBtn = document.getElementById('restore-btn');
+  els.discardBtn = document.getElementById('discard-btn');
 }
 
 function setStatus(text, isError = false) {
@@ -42,30 +47,54 @@ async function handleFileUpload(file) {
   setStatus(`Reading ${file.name}…`);
   try {
     const buffer = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(buffer);
-    if (!zip.file('word/document.xml')) {
-      setStatus('That file does not look like a .docx (missing word/document.xml).', true);
-      return;
-    }
-    const { templateXml, runIndex, paragraphs, sourceFontNames } = await loadDocxModel(zip);
-
-    // Keep the original bytes as the source of truth; every save/export
-    // reloads a fresh zip from these so operations never contaminate each other.
-    state.fileBuffer = buffer;
-    state.fileBaseName = stripExtension(file.name);
-    state.templateXml = templateXml;
-    state.paragraphs = paragraphs;
-    state.sourceFontNames = sourceFontNames;
-    state.mode = 'docx';
-
-    renderEditor(els.editor, paragraphs);
-    els.preview.innerHTML = '<p class="hint">Click “Refresh” to render this in Kruti Dev 035.</p>';
-    els.exportBtn.disabled = true;
-    if (els.saveUnicodeBtn) els.saveUnicodeBtn.disabled = false;
-    setStatus(`Loaded ${file.name} — ${paragraphs.length} paragraphs.`);
+    await buildModelFromBuffer(buffer, file.name);
+    state.dirty = false;
+    setStatus(`Loaded ${file.name} — ${state.paragraphs.length} paragraphs.`);
   } catch (err) {
     console.error(err);
     setStatus(`Could not read that file: ${err.message}`, true);
+  }
+}
+
+/**
+ * Build the in-memory model from raw .docx bytes and render the editor.
+ * Shared by fresh uploads and session restores. Optionally applies a set of
+ * saved edits (runId -> text) onto the model before rendering.
+ * @param {ArrayBuffer} buffer
+ * @param {string} fileName
+ * @param {Array<[string,string]>|null} savedEdits
+ */
+async function buildModelFromBuffer(buffer, fileName, savedEdits = null) {
+  const zip = await JSZip.loadAsync(buffer);
+  if (!zip.file('word/document.xml')) {
+    throw new Error('That file does not look like a .docx (missing word/document.xml).');
+  }
+  const { templateXml, paragraphs, sourceFontNames } = await loadDocxModel(zip);
+
+  // Keep the original bytes as the source of truth; every save/export
+  // reloads a fresh zip from these so operations never contaminate each other.
+  state.fileBuffer = buffer;
+  state.fileBaseName = stripExtension(fileName);
+  state.templateXml = templateXml;
+  state.paragraphs = paragraphs;
+  state.sourceFontNames = sourceFontNames;
+  state.mode = 'docx';
+
+  if (savedEdits) applyEdits(savedEdits);
+
+  renderEditor(els.editor, paragraphs);
+  els.preview.innerHTML = '<p class="hint">Click “Refresh” to render this in Kruti Dev 035.</p>';
+  els.exportBtn.disabled = true;
+  if (els.saveUnicodeBtn) els.saveUnicodeBtn.disabled = false;
+}
+
+/** Apply saved [runId, text] edits onto the current model's runs. */
+function applyEdits(edits) {
+  const map = new Map(edits);
+  for (const para of state.paragraphs) {
+    for (const run of para.runs) {
+      if (map.has(run.id)) run.text = map.get(run.id);
+    }
   }
 }
 
@@ -94,6 +123,7 @@ function loadPlainText(text) {
   state.paragraphs = paragraphs;
   state.sourceFontNames = [];
   state.mode = 'text';
+  state.dirty = false;
 
   renderEditor(els.editor, paragraphs);
   els.preview.innerHTML = '<p class="hint">Click “Refresh” to render this in Kruti Dev 035.</p>';
@@ -195,6 +225,8 @@ async function doSaveUnicode() {
       downloadBlob(blob, `${name}.txt`);
     }
     setStatus(`Saved ${name} — re-upload it later to continue editing.`);
+    state.dirty = false;
+    clearSession();
   } catch (err) {
     console.error(err);
     setStatus(`Save failed: ${err.message}`, true);
@@ -217,6 +249,66 @@ async function checkFont() {
   const installed = isKrutiDevInstalled();
   els.fontBanner.hidden = installed;
   return installed;
+}
+
+/** Build a snapshot of the current session for persistence. */
+function buildSnapshot() {
+  const edits = [...readEditorText(els.editor).entries()];
+  return {
+    fileBuffer: state.fileBuffer, // ArrayBuffer (structured-clone stored by IndexedDB)
+    fileBaseName: state.fileBaseName,
+    mode: state.mode,
+    edits,
+    savedAt: Date.now(),
+  };
+}
+
+/** Save the session snapshot at a risk moment (best-effort, fire-and-forget). */
+function persistSession() {
+  if (!state.paragraphs.length || !state.dirty) return;
+  // Only .docx sessions can be fully restored (paste-mode has no source doc
+  // to rebuild the run structure from); skip persisting paste-only sessions.
+  if (state.mode !== 'docx' || !state.fileBuffer) return;
+  saveSession(buildSnapshot());
+}
+
+/** On startup: if a saved session exists, offer to restore it. */
+async function offerRestore() {
+  const snapshot = await loadSession();
+  if (snapshot && snapshot.mode === 'docx' && snapshot.fileBuffer) {
+    state.pendingSnapshot = snapshot;
+    if (els.restoreBanner) els.restoreBanner.hidden = false;
+  }
+}
+
+async function doRestore() {
+  const snapshot = state.pendingSnapshot;
+  if (!snapshot) return;
+  try {
+    await buildModelFromBuffer(
+      snapshot.fileBuffer,
+      `${snapshot.fileBaseName}.docx`,
+      snapshot.edits
+    );
+    state.dirty = true; // restored edits still aren't saved to a file
+    if (els.restoreBanner) els.restoreBanner.hidden = true;
+    state.pendingSnapshot = null;
+    setStatus('Restored your previous session. Remember to Save or Export when done.');
+  } catch (err) {
+    console.error(err);
+    setStatus(`Could not restore the previous session: ${err.message}`, true);
+  }
+}
+
+async function doDiscard() {
+  await clearSession();
+  state.pendingSnapshot = null;
+  if (els.restoreBanner) els.restoreBanner.hidden = true;
+  setStatus('Previous session discarded.');
+}
+
+function markDirty() {
+  state.dirty = true;
 }
 
 function wireEvents() {
@@ -251,6 +343,27 @@ function wireEvents() {
   els.refreshBtn.addEventListener('click', doRefresh);
   els.exportBtn.addEventListener('click', doExport);
   if (els.saveUnicodeBtn) els.saveUnicodeBtn.addEventListener('click', doSaveUnicode);
+  if (els.restoreBtn) els.restoreBtn.addEventListener('click', doRestore);
+  if (els.discardBtn) els.discardBtn.addEventListener('click', doDiscard);
+
+  // Any edit in the left pane marks the session dirty.
+  els.editor.addEventListener('input', markDirty);
+
+  // Risk moments: persist a snapshot when the tab is being hidden or the
+  // page is about to unload (covers reload, back-button and tab close).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistSession();
+  });
+  window.addEventListener('pagehide', persistSession);
+  window.addEventListener('beforeunload', (e) => {
+    persistSession();
+    if (state.dirty) {
+      // Triggers the browser's native "Leave site? Changes you made may not
+      // be saved." dialog on reload / back / close.
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
 
   // drag & drop onto the editor pane
   els.editor.addEventListener('dragover', (e) => e.preventDefault());
@@ -265,6 +378,7 @@ function init() {
   cacheElements();
   wireEvents();
   checkFont();
+  offerRestore();
   setStatus('Upload a .docx or paste Marathi text to begin.');
 }
 

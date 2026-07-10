@@ -194,7 +194,7 @@ body {
 }
 
 .kruti-font, .kruti-font * {
-  font-family: 'Kruti Dev 035', 'Kruti Dev 010', sans-serif;
+  font-family: var(--kd-font, 'Kruti Dev 035'), 'Kruti Dev 035', 'Kruti Dev 035 Bold', 'KrutiDev 035', 'Kruti Dev 010', sans-serif;
 }
 
 .hint {
@@ -300,3 +300,25 @@ body {
   filter: none;
   background: #ece6d6;
 }
+
+/* ---------- restore session banner ---------- */
+.restore-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: #1f2a44;
+  color: #f4f1e8;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  padding: 12px 28px;
+  border-bottom: 2px solid var(--gold);
+}
+.restore-text { font-weight: 600; }
+.restore-actions { display: flex; gap: 10px; }
+.btn-ghost-light {
+  color: #f4f1e8;
+  border-color: #5a6b8a;
+}
+.btn-ghost-light:hover { background: rgba(255,255,255,0.08); filter: none; }

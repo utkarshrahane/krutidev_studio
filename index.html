@@ -26,9 +26,20 @@
 </header>
 
 <div id="font-banner" class="font-banner" hidden>
-  Kruti Dev 035 doesn't seem to be installed in this browser, so the right pane will show fallback
-  glyphs instead of real Devanagari shapes. The converted text is still correct — install the font
-  locally (or open the exported .docx on a machine that has it) to see the true rendering.
+  Kruti Dev 035 isn't visible to this browser yet, so the right pane shows fallback glyphs — the
+  converted text underneath is still correct. To fix: <strong>1)</strong> close <em>all</em> Chrome windows and
+  reopen (Chrome only scans fonts at startup — type <code>chrome://restart</code> in the address bar), and if
+  that's not enough <strong>2)</strong> right-click the font's .ttf file and choose
+  <strong>“Install for all users”</strong> (Windows installs fonts per-user by default, which some apps can't see),
+  then restart Chrome again. The exported .docx is unaffected either way.
+</div>
+
+<div id="restore-banner" class="restore-banner" hidden>
+  <span class="restore-text">🛟 You have unsaved work from a previous session. Restore it?</span>
+  <span class="restore-actions">
+    <button id="restore-btn" class="btn btn-primary">Restore</button>
+    <button id="discard-btn" class="btn btn-ghost btn-ghost-light">Discard</button>
+  </span>
 </div>
 
 <main class="workspace">
