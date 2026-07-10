@@ -4,7 +4,7 @@ import { exportDocx, saveUnicodeDocx } from './docx/docxExporter.js';
 import { renderEditor, readEditorText } from './ui/editorPane.js';
 import { renderPreview } from './ui/previewPane.js';
 import { isKrutiDevInstalled, waitForFontsReady } from './ui/fontCheck.js';
-import { saveSession, loadSession, clearSession } from './state/sessionStore.js';
+import { saveSession, saveEdits, loadSession, clearSession } from './state/sessionStore.js';
 
 const state = {
   fileBuffer: null,   // original uploaded .docx bytes (source of truth)
@@ -36,6 +36,7 @@ function cacheElements() {
   els.restoreBanner = document.getElementById('restore-banner');
   els.restoreBtn = document.getElementById('restore-btn');
   els.discardBtn = document.getElementById('discard-btn');
+  els.saveIndicator = document.getElementById('save-indicator');
 }
 
 function setStatus(text, isError = false) {
@@ -49,6 +50,7 @@ async function handleFileUpload(file) {
     const buffer = await file.arrayBuffer();
     await buildModelFromBuffer(buffer, file.name);
     state.dirty = false;
+    state.baseSaved = false;
     setStatus(`Loaded ${file.name} — ${state.paragraphs.length} paragraphs.`);
   } catch (err) {
     console.error(err);
@@ -227,6 +229,8 @@ async function doSaveUnicode() {
     setStatus(`Saved ${name} — re-upload it later to continue editing.`);
     state.dirty = false;
     clearSession();
+    state.baseSaved = false;
+    setSaveIndicator('');
   } catch (err) {
     console.error(err);
     setStatus(`Save failed: ${err.message}`, true);
@@ -251,11 +255,11 @@ async function checkFont() {
   return installed;
 }
 
-/** Build a snapshot of the current session for persistence. */
+/** Build the FULL snapshot (includes doc bytes) — used once per document. */
 function buildSnapshot() {
   const edits = [...readEditorText(els.editor).entries()];
   return {
-    fileBuffer: state.fileBuffer, // ArrayBuffer (structured-clone stored by IndexedDB)
+    fileBuffer: state.fileBuffer,
     fileBaseName: state.fileBaseName,
     mode: state.mode,
     edits,
@@ -263,13 +267,69 @@ function buildSnapshot() {
   };
 }
 
-/** Save the session snapshot at a risk moment (best-effort, fire-and-forget). */
-function persistSession() {
+/**
+ * Write the base recovery snapshot (doc bytes + edits) once, so later
+ * autosaves only need to send the tiny edits payload. Sets state.baseSaved.
+ */
+async function saveBaseSnapshot() {
+  if (state.mode !== 'docx' || !state.fileBuffer) return false;
+  const ok = await saveSession(buildSnapshot());
+  if (ok) state.baseSaved = true;
+  return ok;
+}
+
+/** Current edits as a plain array, syncing the editor into the model first. */
+function currentEdits() {
+  const currentTextById = readEditorText(els.editor);
+  for (const para of state.paragraphs) {
+    for (const run of para.runs) {
+      if (currentTextById.has(run.id)) run.text = currentTextById.get(run.id);
+    }
+  }
+  return [...currentTextById.entries()];
+}
+
+/** Persist at a risk moment (page hide/unload). Small edits payload only. */
+function persistSession(onUnload = false) {
   if (!state.paragraphs.length || !state.dirty) return;
-  // Only .docx sessions can be fully restored (paste-mode has no source doc
-  // to rebuild the run structure from); skip persisting paste-only sessions.
   if (state.mode !== 'docx' || !state.fileBuffer) return;
-  saveSession(buildSnapshot());
+  if (state.baseSaved) {
+    saveEdits(currentEdits(), onUnload);
+  } else {
+    // No base yet: must send the full snapshot (can't use keepalive — large).
+    saveSession(buildSnapshot());
+  }
+}
+
+const AUTOSAVE_INTERVAL_MS = 5000; // write recovery every 5s when there are edits
+
+/**
+ * Timed autosave. First tick after a doc loads writes the full base snapshot
+ * (doc bytes); subsequent ticks send only the small edits payload to disk.
+ * On-disk persistence is what protects against crash / power loss.
+ */
+async function autosaveTick() {
+  if (!state.paragraphs.length || !state.dirty) return;
+  if (state.mode !== 'docx' || !state.fileBuffer) return;
+
+  let ok;
+  if (!state.baseSaved) {
+    ok = await saveBaseSnapshot();
+  } else {
+    ok = await saveEdits(currentEdits());
+    // If the base file vanished (e.g. cleared), re-establish it.
+    if (!ok) ok = await saveBaseSnapshot();
+  }
+  if (ok) setSaveIndicator(`Recovery saved ${new Date().toLocaleTimeString()}`);
+}
+
+function startAutosave() {
+  if (state.autosaveTimer) return;
+  state.autosaveTimer = setInterval(() => { autosaveTick(); }, AUTOSAVE_INTERVAL_MS);
+}
+
+function setSaveIndicator(text) {
+  if (els.saveIndicator) els.saveIndicator.textContent = text;
 }
 
 /** On startup: if a saved session exists, offer to restore it. */
@@ -291,6 +351,7 @@ async function doRestore() {
       snapshot.edits
     );
     state.dirty = true; // restored edits still aren't saved to a file
+    state.baseSaved = true; // the recovery file already holds the doc bytes
     if (els.restoreBanner) els.restoreBanner.hidden = true;
     state.pendingSnapshot = null;
     setStatus('Restored your previous session. Remember to Save or Export when done.');
@@ -303,6 +364,7 @@ async function doRestore() {
 async function doDiscard() {
   await clearSession();
   state.pendingSnapshot = null;
+  state.baseSaved = false;
   if (els.restoreBanner) els.restoreBanner.hidden = true;
   setStatus('Previous session discarded.');
 }
@@ -354,9 +416,9 @@ function wireEvents() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') persistSession();
   });
-  window.addEventListener('pagehide', persistSession);
+  window.addEventListener('pagehide', () => persistSession(true));
   window.addEventListener('beforeunload', (e) => {
-    persistSession();
+    persistSession(true);
     if (state.dirty) {
       // Triggers the browser's native "Leave site? Changes you made may not
       // be saved." dialog on reload / back / close.
@@ -379,6 +441,7 @@ function init() {
   wireEvents();
   checkFont();
   offerRestore();
+  startAutosave();
   setStatus('Upload a .docx or paste Marathi text to begin.');
 }
 
